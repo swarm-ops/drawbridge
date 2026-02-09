@@ -100,11 +100,23 @@ curl -X POST http://localhost:3062/api/session/my-session/elements \
 
 | Environment Variable | Default | Description |
 |---|---|---|
-| `DRAWBRIDGE_API_PORT` | `3062` | HTTP API port |
-| `DRAWBRIDGE_WS_PORT` | `3061` | WebSocket port |
+| `DRAWBRIDGE_PORT` | `3062` | HTTP + WebSocket port |
 | `DRAWBRIDGE_DATA_DIR` | `./data` | Directory for persistent session data |
 
-The frontend connects to WebSocket on `window.location.hostname:3061` by default. Modify `src/App.tsx` to change this.
+HTTP API and WebSocket run on the same port. The frontend auto-detects: on HTTPS (production), it connects to the same origin; on HTTP (local dev via Vite), it connects to port 3062.
+
+### Container Deployment
+
+```bash
+podman-compose up -d   # Builds and starts on port 5050
+```
+
+Or with systemd for auto-restart on boot:
+
+```bash
+systemctl --user enable drawbridge.service
+systemctl --user start drawbridge.service
+```
 
 ## API Reference
 

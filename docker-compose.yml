@@ -1,0 +1,12 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "5050:3062"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - DRAWBRIDGE_PORT=3062

@@ -4,7 +4,7 @@
  * HTTP + WebSocket bridge that lets any AI (Claude, GPT, etc.) or script
  * push diagram elements to an Excalidraw canvas in real time.
  *
- * HTTP API (default port 3062, configurable via DRAWBRIDGE_API_PORT):
+ * Single port (default 3062, configurable via DRAWBRIDGE_PORT):
  *   POST /api/session/:id/elements - Replace all elements
  *   POST /api/session/:id/append  - Add elements (progressive drawing)
  *   POST /api/session/:id/clear   - Clear canvas
@@ -13,14 +13,14 @@
  *   GET  /api/session/:id         - Get current elements
  *   GET  /api/sessions            - List active sessions
  *   GET  /health                  - Health check
+ *   ws://host:PORT/ws/:sessionId  - Real-time bidirectional updates
  *
  * Persistence:
  *   Sessions are persisted to disk using append-only logs + periodic snapshots.
  *   Data stored in ./data/ (configurable via DRAWBRIDGE_DATA_DIR).
  *   Undo replays the log minus the last entry.
  *
- * WebSocket (default port 3061, configurable via DRAWBRIDGE_WS_PORT):
- *   ws://host:PORT/ws/:sessionId  - Real-time bidirectional updates
+ * If dist/ exists, serves the built Vite frontend as static files.
  */
 
 import express from 'express';
@@ -30,8 +30,7 @@ import { parse } from 'url';
 import { mkdirSync, existsSync, readFileSync, writeFileSync, appendFileSync, unlinkSync, renameSync } from 'fs';
 import { join } from 'path';
 
-const WS_PORT = parseInt(process.env.DRAWBRIDGE_WS_PORT || '3061');
-const API_PORT = parseInt(process.env.DRAWBRIDGE_API_PORT || '3062');
+const PORT = parseInt(process.env.DRAWBRIDGE_PORT || '3062');
 const DATA_DIR = process.env.DRAWBRIDGE_DATA_DIR || join(import.meta.dirname, 'data');
 const SNAPSHOT_INTERVAL = 20; // Write snapshot every N operations
 
@@ -198,101 +197,9 @@ function broadcast(session, msg) {
   }
 }
 
-// --- WebSocket Server (port 3061) ---
+// --- WebSocket setup (noServer mode, attached to HTTP server below) ---
 
-const wsServer = createServer();
 const wss = new WebSocketServer({ noServer: true });
-
-wsServer.on('upgrade', (request, socket, head) => {
-  const { pathname } = parse(request.url || '');
-  const match = pathname?.match(/^\/ws\/(.+)$/);
-
-  if (!match) {
-    socket.destroy();
-    return;
-  }
-
-  wss.handleUpgrade(request, socket, head, (ws) => {
-    const sessionId = match[1];
-    const session = getSession(sessionId);
-    session.clients.add(ws);
-
-    console.log(`[WS] Client connected to session: ${sessionId} (${session.clients.size} clients)`);
-
-    // Send current state on connect
-    if (session.elements.length > 0) {
-      ws.send(JSON.stringify({
-        type: 'elements',
-        elements: session.elements,
-        appState: session.appState,
-      }));
-    }
-    // Send current viewport if set
-    if (session.viewport) {
-      ws.send(JSON.stringify({
-        type: 'viewport',
-        viewport: session.viewport,
-      }));
-    }
-
-    // Debounce persistence for user edits (onChange fires on every mouse move)
-    let persistTimer = null;
-
-    ws.on('message', (data) => {
-      try {
-        const msg = JSON.parse(data.toString());
-
-        if (msg.type === 'update') {
-          session.elements = msg.elements;
-          // Debounce disk writes — only persist after 500ms of quiet
-          if (persistTimer) clearTimeout(persistTimer);
-          persistTimer = setTimeout(() => {
-            appendLog(sessionId, session, { type: 'update', elements: session.elements });
-          }, 500);
-          // Broadcast to other clients immediately (not the sender)
-          for (const client of session.clients) {
-            if (client !== ws && client.readyState === WebSocket.OPEN) {
-              client.send(JSON.stringify({
-                type: 'elements',
-                elements: msg.elements,
-              }));
-            }
-          }
-        }
-      } catch (err) {
-        console.error('[WS] Message parse error:', err);
-      }
-    });
-
-    ws.on('close', () => {
-      // Flush any pending debounced persist
-      if (persistTimer) {
-        clearTimeout(persistTimer);
-        appendLog(sessionId, session, { type: 'update', elements: session.elements });
-      }
-      session.clients.delete(ws);
-      console.log(`[WS] Client disconnected from session: ${sessionId} (${session.clients.size} clients)`);
-      // Evict from memory after 5 minutes with no clients (data stays on disk)
-      if (session.clients.size === 0) {
-        setTimeout(() => {
-          const s = sessions.get(sessionId);
-          if (s && s.clients.size === 0) {
-            // Write final snapshot before evicting from memory
-            if (s.elements.length > 0) {
-              writeSnapshot(sessionId, s);
-            }
-            sessions.delete(sessionId);
-            console.log(`[WS] Session evicted from memory: ${sessionId} (data persisted on disk)`);
-          }
-        }, 5 * 60 * 1000);
-      }
-    });
-  });
-});
-
-wsServer.listen(WS_PORT, () => {
-  console.log(`[WS] WebSocket server running on port ${WS_PORT}`);
-});
 
 // --- HTTP API Server (port 3062) ---
 
@@ -440,6 +347,91 @@ app.post('/api/session/:id/undo', (req, res) => {
   }
 });
 
-app.listen(API_PORT, () => {
-  console.log(`[HTTP] API server running on port ${API_PORT}`);
+// Serve built frontend (for containerized/production deployment)
+const staticDir = join(import.meta.dirname, 'dist');
+if (existsSync(staticDir)) {
+  app.use(express.static(staticDir));
+  // SPA fallback — serve index.html for non-API routes
+  app.get('{*path}', (_req, res) => {
+    res.sendFile(join(staticDir, 'index.html'));
+  });
+  console.log(`[HTTP] Serving static files from ${staticDir}`);
+}
+
+const httpServer = createServer(app);
+
+// Handle WebSocket upgrades on the same port as HTTP
+httpServer.on('upgrade', (request, socket, head) => {
+  const { pathname } = parse(request.url || '');
+  const match = pathname?.match(/^\/ws\/(.+)$/);
+  if (match) {
+    wss.handleUpgrade(request, socket, head, (ws) => wss.emit('connection', ws, request));
+  } else {
+    socket.destroy();
+  }
+});
+
+// Re-emit connections through the existing handler
+wss.removeAllListeners('connection');
+wss.on('connection', (ws, request) => {
+  const { pathname } = parse(request.url || '');
+  const sessionId = pathname?.match(/^\/ws\/(.+)$/)?.[1];
+  if (!sessionId) { ws.close(); return; }
+
+  const session = getSession(sessionId);
+  session.clients.add(ws);
+
+  console.log(`[WS] Client connected to session: ${sessionId} (${session.clients.size} clients)`);
+
+  if (session.elements.length > 0) {
+    ws.send(JSON.stringify({ type: 'elements', elements: session.elements, appState: session.appState }));
+  }
+  if (session.viewport) {
+    ws.send(JSON.stringify({ type: 'viewport', viewport: session.viewport }));
+  }
+
+  let persistTimer = null;
+
+  ws.on('message', (data) => {
+    try {
+      const msg = JSON.parse(data.toString());
+      if (msg.type === 'update') {
+        session.elements = msg.elements;
+        if (persistTimer) clearTimeout(persistTimer);
+        persistTimer = setTimeout(() => {
+          appendLog(sessionId, session, { type: 'update', elements: session.elements });
+        }, 500);
+        for (const client of session.clients) {
+          if (client !== ws && client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify({ type: 'elements', elements: msg.elements }));
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[WS] Message parse error:', err);
+    }
+  });
+
+  ws.on('close', () => {
+    if (persistTimer) {
+      clearTimeout(persistTimer);
+      appendLog(sessionId, session, { type: 'update', elements: session.elements });
+    }
+    session.clients.delete(ws);
+    console.log(`[WS] Client disconnected from session: ${sessionId} (${session.clients.size} clients)`);
+    if (session.clients.size === 0) {
+      setTimeout(() => {
+        const s = sessions.get(sessionId);
+        if (s && s.clients.size === 0) {
+          if (s.elements.length > 0) writeSnapshot(sessionId, s);
+          sessions.delete(sessionId);
+          console.log(`[WS] Session evicted from memory: ${sessionId} (data persisted on disk)`);
+        }
+      }, 5 * 60 * 1000);
+    }
+  });
+});
+
+httpServer.listen(PORT, () => {
+  console.log(`[HTTP] API + WebSocket server running on port ${PORT}`);
 });

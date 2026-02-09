@@ -193,7 +193,12 @@ export default function App() {
   // Connect to WebSocket server with retry (no page reload)
   const connectWs = useCallback(() => {
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${wsProtocol}//${window.location.hostname}:3061/ws/${sessionId}`;
+    // In production (HTTPS via Caddy), WebSocket is on the same host:port
+    // In local dev (Vite on :3060), connect to the API server on :3062
+    const wsHost = window.location.protocol === 'https:'
+      ? window.location.host
+      : `${window.location.hostname}:3062`;
+    const wsUrl = `${wsProtocol}//${wsHost}/ws/${sessionId}`;
 
     try {
       const ws = new WebSocket(wsUrl);
