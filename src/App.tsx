@@ -788,11 +788,11 @@ export default function App() {
   })();
 
   return (
-    <div style={{ width: '100%', height: '100%', position: 'relative' }}>
+    <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
       {/* Conflict resolution banner */}
       {conflict && (
         <div style={{
-          position: 'absolute', top: 0, left: 0, right: 0, zIndex: 100,
+          flexShrink: 0,
           background: '#fff3cd', borderBottom: '2px solid #ffc107',
           padding: '10px 16px', display: 'flex', alignItems: 'center',
           gap: 12, fontFamily: 'system-ui', fontSize: 13,
@@ -829,7 +829,7 @@ export default function App() {
       {/* Preview mode banner */}
       {previewingVersion && !conflict && (
         <div style={{
-          position: 'absolute', top: 0, left: 0, right: 0, zIndex: 100,
+          flexShrink: 0,
           background: '#fff9db', borderBottom: '2px solid #fab005',
           padding: '10px 16px', display: 'flex', alignItems: 'center',
           gap: 12, fontFamily: 'system-ui', fontSize: 13,
@@ -846,6 +846,8 @@ export default function App() {
         </div>
       )}
 
+      {/* Canvas area — flex-grows to fill remaining space */}
+      <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
       {/* History button — matches Excalidraw undo/redo style, positioned beside them */}
       <button
         onClick={showHistory ? () => { if (previewingVersion) cancelPreview(); setShowHistory(false); } : openHistory}
@@ -895,7 +897,7 @@ export default function App() {
                 background: isPreviewing ? '#fff9db' : 'transparent',
                 borderLeft: isPreviewing ? '3px solid #fab005' : '3px solid transparent',
               }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                     <span style={{ fontSize: 12, color: '#1a1a1a', fontWeight: 500 }}>v{v.version}</span>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -984,6 +986,7 @@ export default function App() {
           },
         }}
       />
+      </div>
     </div>
   );
 }
