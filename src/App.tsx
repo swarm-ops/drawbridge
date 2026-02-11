@@ -683,7 +683,7 @@ export default function App() {
     return () => clearInterval(interval);
   }, [showHistory, loadHistoryEntries]);
 
-  const previewVersion = useCallback((elements: any[]) => {
+  const previewVersion = useCallback((elements: any[], versionNum?: number) => {
     if (!excalidrawAPI) return;
     if (!previewOriginalElements.current) {
       previewOriginalElements.current = excalidrawAPI.getSceneElements().filter((el: any) => !el.isDeleted);
@@ -691,7 +691,7 @@ export default function App() {
     setViewMode(true);
     isRemoteUpdate.current = true;
     excalidrawAPI.updateScene({ elements });
-    setPreviewingVersion(Date.now());
+    setPreviewingVersion(versionNum ?? Date.now());
     setTimeout(() => { isRemoteUpdate.current = false; }, 100);
   }, [excalidrawAPI]);
 
@@ -897,7 +897,7 @@ export default function App() {
                   </div>
                   <div style={{ display: 'flex', gap: 4 }}>
                     {v.elements && (
-                      <button onClick={() => previewVersion(v.elements!)} style={{
+                      <button onClick={() => previewVersion(v.elements!, v.version)} style={{
                         padding: '2px 8px', borderRadius: 3, border: '1px solid #dee2e6',
                         background: '#fff', cursor: 'pointer', fontSize: 11, color: '#495057',
                       }}>Preview</button>
@@ -923,7 +923,7 @@ export default function App() {
               background: '#fff9db', display: 'flex', justifyContent: 'space-between',
               alignItems: 'center',
             }}>
-              <span style={{ fontSize: 12, color: '#856404' }}>Previewing version</span>
+              <span style={{ fontSize: 12, color: '#856404' }}>Previewing v{previewingVersion}</span>
               <button onClick={cancelPreview} style={{
                 padding: '3px 10px', borderRadius: 3, border: '1px solid #856404',
                 background: 'transparent', color: '#856404', cursor: 'pointer', fontSize: 11,
