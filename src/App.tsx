@@ -747,7 +747,9 @@ export default function App() {
     // since they can't be previewed and would be confusing to show
 
     merged.sort((a, b) => b.timestamp - a.timestamp);
-    return merged;
+    // Assign version numbers: oldest = v1, newest = highest
+    const total = merged.length;
+    return merged.map((v, i) => ({ ...v, version: total - i }));
   })();
 
   return (
@@ -835,23 +837,31 @@ export default function App() {
                 display: 'flex', flexDirection: 'column', gap: 4,
               }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontSize: 12, color: '#495057' }}>
-                    {new Date(v.timestamp).toLocaleString()}
+                  <span style={{ fontSize: 12, color: '#1a1a1a', fontWeight: 500 }}>
+                    v{v.version}
+                    <span style={{ fontWeight: 400, color: '#868e96', marginLeft: 6 }}>
+                      {v.elementCount} elements
+                    </span>
                   </span>
                   <span style={{
                     fontSize: 10, padding: '1px 6px', borderRadius: 3,
                     background: v.source === 'local' ? '#d3f9d8' :
                       v.source === 'server' ? '#d0ebff' :
                       v.source === 'restored' ? '#e7f5ff' :
-                      v.source === 'server-backup' ? '#fff3bf' :
                       v.source.startsWith('conflict') ? '#ffe3e3' : '#f1f3f5',
                     color: '#495057',
                   }}>
-                    {v.source}
+                    {v.source === 'local' ? 'edit' :
+                     v.source === 'server' ? 'synced' :
+                     v.source === 'restored' ? 'restored' :
+                     v.source === 'conflict-local' ? 'conflict (yours)' :
+                     v.source === 'conflict-server' ? 'conflict (server)' : v.source}
                   </span>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontSize: 11, color: '#868e96' }}>{v.elementCount} elements</span>
+                  <span style={{ fontSize: 11, color: '#868e96' }}>
+                    {new Date(v.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+                  </span>
                   <div style={{ display: 'flex', gap: 4 }}>
                     {v.elements && (
                       <button onClick={() => previewVersion(v.elements!)} style={{
