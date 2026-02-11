@@ -839,9 +839,6 @@ export default function App() {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span style={{ fontSize: 12, color: '#1a1a1a', fontWeight: 500 }}>
                     v{v.version}
-                    <span style={{ fontWeight: 400, color: '#868e96', marginLeft: 6 }}>
-                      {v.elementCount} elements
-                    </span>
                   </span>
                   <span style={{
                     fontSize: 10, padding: '1px 6px', borderRadius: 3,
@@ -860,6 +857,7 @@ export default function App() {
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span style={{ fontSize: 11, color: '#868e96' }}>
+                    {new Date(v.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric' })}{' '}
                     {new Date(v.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
                   </span>
                   <div style={{ display: 'flex', gap: 4 }}>
