@@ -665,6 +665,13 @@ export default function App() {
     setShowHistory(true);
   }, [loadHistoryEntries]);
 
+  // Auto-refresh history list while panel is open
+  useEffect(() => {
+    if (!showHistory) return;
+    const interval = setInterval(loadHistoryEntries, 5000);
+    return () => clearInterval(interval);
+  }, [showHistory, loadHistoryEntries]);
+
   const previewVersion = useCallback((elements: any[]) => {
     if (!excalidrawAPI) return;
     if (!previewOriginalElements.current) {
