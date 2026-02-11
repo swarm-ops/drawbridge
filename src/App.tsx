@@ -301,6 +301,7 @@ export default function App() {
   const isRemoteUpdate = useRef(false);
   const reconnectTimer = useRef<number | null>(null);
   const lastElementCount = useRef(0);
+  const serverVersion = useRef(0);
   const [cachedElements, setCachedElements] = useState<any[] | null>(null);
 
   // Conflict resolution state
@@ -442,6 +443,7 @@ export default function App() {
             const api = apiRef.current;
 
             if (msg.type === 'elements' && api) {
+              if (msg.version !== undefined) serverVersion.current = msg.version;
               const serverElements = await sanitizeElements(msg.elements);
 
               // Only check for conflicts on the first elements message after (re)connect
@@ -602,6 +604,7 @@ export default function App() {
       wsRef.current.send(JSON.stringify({
         type: 'update',
         elements: activeElements,
+        baseVersion: serverVersion.current,
       }));
 
       // Check for new image files via API (more reliable than onChange 3rd arg)
@@ -630,7 +633,7 @@ export default function App() {
 
     // Push chosen state to server
     if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'update', elements }));
+      wsRef.current.send(JSON.stringify({ type: 'update', elements, baseVersion: serverVersion.current }));
     }
 
     setConflict(null);
@@ -728,7 +731,7 @@ export default function App() {
       await versionHistory.saveVersion(sessionId, elements, 'restored', fromVersion);
 
       if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify({ type: 'update', elements }));
+        wsRef.current.send(JSON.stringify({ type: 'update', elements, baseVersion: serverVersion.current }));
       }
       setTimeout(() => { isRemoteUpdate.current = false; }, 100);
     }

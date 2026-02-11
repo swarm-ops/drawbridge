@@ -107,7 +107,7 @@ function applyOp(session, op) {
 }
 
 function loadSession(sessionId) {
-  const session = { elements: [], appState: null, viewport: null, files: {}, clients: new Set(), _lastSnapshotAt: Date.now() };
+  const session = { elements: [], appState: null, viewport: null, files: {}, clients: new Set(), _lastSnapshotAt: Date.now(), _version: 0 };
 
   // Load snapshot if exists
   const sp = snapshotPath(sessionId);
@@ -211,10 +211,12 @@ function restoreSnapshot(sessionId, timestamp) {
     session._lastSnapshotAt = Date.now();
 
     // Broadcast to all connected clients
+    session._version++;
     broadcast(session, {
       type: 'elements',
       elements: session.elements,
       appState: session.appState,
+      version: session._version,
       source: 'restore',
     });
 
@@ -395,6 +397,7 @@ app.post('/api/session/:id/elements', (req, res) => {
 
   session.elements = drawElements;
   if (appState) session.appState = appState;
+  session._version++;
   appendLog(req.params.id, session, { type: 'set', elements: drawElements, appState: appState || null });
 
   // Send elements to all clients
@@ -402,6 +405,7 @@ app.post('/api/session/:id/elements', (req, res) => {
     type: 'elements',
     elements: session.elements,
     appState: session.appState,
+    version: session._version,
   });
 
   // Send viewport updates (use last one as the final camera position)
@@ -636,7 +640,7 @@ wss.on('connection', (ws, request) => {
   console.log(`[WS] Client connected to session: ${sessionId} (${session.clients.size} clients)`);
 
   if (session.elements.length > 0) {
-    ws.send(JSON.stringify({ type: 'elements', elements: session.elements, appState: session.appState }));
+    ws.send(JSON.stringify({ type: 'elements', elements: session.elements, appState: session.appState, version: session._version }));
   }
   if (session.viewport) {
     ws.send(JSON.stringify({ type: 'viewport', viewport: session.viewport }));
@@ -651,14 +655,24 @@ wss.on('connection', (ws, request) => {
     try {
       const msg = JSON.parse(data.toString());
       if (msg.type === 'update') {
+        // Reject stale updates: client must be based on the current version
+        const baseVersion = msg.baseVersion;
+        if (baseVersion !== undefined && baseVersion < session._version) {
+          // Client is behind — send them the current state instead
+          console.log(`[WS] Rejected stale update for ${sessionId}: client v${baseVersion} < server v${session._version}`);
+          ws.send(JSON.stringify({ type: 'elements', elements: session.elements, appState: session.appState, version: session._version, source: 'version-correction' }));
+          return;
+        }
+
         session.elements = msg.elements;
+        session._version++;
         if (persistTimer) clearTimeout(persistTimer);
         persistTimer = setTimeout(() => {
           appendLog(sessionId, session, { type: 'update', elements: session.elements });
         }, 500);
         for (const client of session.clients) {
           if (client !== ws && client.readyState === WebSocket.OPEN) {
-            client.send(JSON.stringify({ type: 'elements', elements: msg.elements }));
+            client.send(JSON.stringify({ type: 'elements', elements: msg.elements, version: session._version }));
           }
         }
       }
