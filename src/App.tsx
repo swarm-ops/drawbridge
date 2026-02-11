@@ -311,7 +311,9 @@ export default function App() {
   } | null>(null);
 
   // Version history panel
-  const [showHistory, setShowHistory] = useState(false);
+  const [showHistory, setShowHistory] = useState(() => {
+    try { return localStorage.getItem('drawbridge:history-open') === 'true'; } catch { return false; }
+  });
   const [historyEntries, setHistoryEntries] = useState<VersionEntry[]>([]);
   // Server versions fetched but reserved for disaster recovery, not shown in UI
   const [serverVersions, setServerVersions] = useState<any[]>([]);
@@ -664,6 +666,12 @@ export default function App() {
     loadHistoryEntries();
     setShowHistory(true);
   }, [loadHistoryEntries]);
+
+  // Persist history panel open/closed state
+  useEffect(() => {
+    try { localStorage.setItem('drawbridge:history-open', String(showHistory)); } catch {}
+    if (showHistory) loadHistoryEntries();
+  }, [showHistory, loadHistoryEntries]);
 
   // Auto-refresh history list while panel is open
   useEffect(() => {
