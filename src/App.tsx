@@ -318,6 +318,7 @@ export default function App() {
   // Server versions fetched but reserved for disaster recovery, not shown in UI
   const [serverVersions, setServerVersions] = useState<any[]>([]);
   const [previewingVersion, setPreviewingVersion] = useState<number | null>(null);
+  const [viewMode, setViewMode] = useState(false);
   const previewOriginalElements = useRef<any[] | null>(null);
 
   // Throttle IndexedDB saves
@@ -452,9 +453,11 @@ export default function App() {
               let localElements: any[] = [];
               if (shouldCheckConflict) {
                 localElements = api.getSceneElements().filter((el: any) => !el.isDeleted);
-                const localIds = localElements.map((el: any) => el.id).sort().join(',');
-                const serverIds = serverElements.map((el: any) => el.id).sort().join(',');
-                hasConflict = localIds !== serverIds && localElements.length > 0;
+                // Compare id:version pairs to catch both structural AND content changes
+                // (e.g., moved shapes, edited text — same IDs but different versions)
+                const localFingerprint = localElements.map((el: any) => `${el.id}:${el.version || 0}`).sort().join(',');
+                const serverFingerprint = serverElements.map((el: any) => `${el.id}:${el.version || 0}`).sort().join(',');
+                hasConflict = localFingerprint !== serverFingerprint && localElements.length > 0;
               }
 
               if (hasConflict) {
@@ -580,13 +583,13 @@ export default function App() {
   // Send changes back to server when user edits
   const onChange = useCallback(
     (elements: readonly any[], _appState: any) => {
-      if (isRemoteUpdate.current) return;
+      if (isRemoteUpdate.current || previewOriginalElements.current) return;
 
       const activeElements = elements.filter((el: any) => !el.isDeleted);
 
       saveToStorage(sessionId, activeElements as any[]);
 
-      // Save to IndexedDB (throttled to every 30s)
+      // Save to IndexedDB (throttled to every 5 min)
       const now = Date.now();
       if (now - lastVersionSave.current > VERSION_SAVE_THROTTLE_MS) {
         lastVersionSave.current = now;
@@ -685,6 +688,7 @@ export default function App() {
     if (!previewOriginalElements.current) {
       previewOriginalElements.current = excalidrawAPI.getSceneElements().filter((el: any) => !el.isDeleted);
     }
+    setViewMode(true);
     isRemoteUpdate.current = true;
     excalidrawAPI.updateScene({ elements });
     setPreviewingVersion(Date.now());
@@ -693,6 +697,7 @@ export default function App() {
 
   const cancelPreview = useCallback(() => {
     if (!excalidrawAPI || !previewOriginalElements.current) return;
+    setViewMode(false);
     isRemoteUpdate.current = true;
     excalidrawAPI.updateScene({ elements: previewOriginalElements.current });
     previewOriginalElements.current = null;
@@ -730,6 +735,7 @@ export default function App() {
 
     previewOriginalElements.current = null;
     setPreviewingVersion(null);
+    setViewMode(false);
     setShowHistory(false);
     setStatus(`Connected - Session: ${sessionId} - ${elements.length} elements (restored)`);
   }, [excalidrawAPI, sessionId]);
@@ -950,6 +956,7 @@ export default function App() {
       <Excalidraw
         excalidrawAPI={(api: any) => setExcalidrawAPI(api)}
         onChange={onChange}
+        viewModeEnabled={viewMode}
         initialData={{
           elements: cachedElements || [],
           appState: {

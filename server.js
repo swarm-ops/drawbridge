@@ -461,6 +461,12 @@ app.post('/api/session/:id/viewport', (req, res) => {
 // Clear session
 app.post('/api/session/:id/clear', (req, res) => {
   const session = getSession(req.params.id);
+
+  // Version current state before clearing so it can be recovered
+  if (session.elements.length > 0) {
+    writeSnapshot(req.params.id, session);
+  }
+
   session.elements = [];
   session.appState = null;
   session.viewport = null;
