@@ -866,10 +866,14 @@ export default function App() {
               <div style={{ padding: '20px 16px', color: '#868e96', fontSize: 13, textAlign: 'center' }}>
                 No version history yet. Edits are saved automatically.
               </div>
-            ) : allVersions.map((v, i) => (
+            ) : allVersions.map((v, i) => {
+              const isPreviewing = previewingVersion === v.version;
+              return (
               <div key={`${v.timestamp}-${i}`} style={{
                 padding: '8px 16px', borderBottom: '1px solid #f1f3f5',
                 display: 'flex', flexDirection: 'column', gap: 4,
+                background: isPreviewing ? '#fff9db' : 'transparent',
+                borderLeft: isPreviewing ? '3px solid #fab005' : '3px solid transparent',
               }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -915,7 +919,8 @@ export default function App() {
                   </div>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
           {previewingVersion && (
             <div style={{
