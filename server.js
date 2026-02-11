@@ -33,8 +33,8 @@ import { initSpacesClient, isSpacesEnabled, getSpacesInternals, uploadFile } fro
 
 const PORT = parseInt(process.env.DRAWBRIDGE_PORT || '3062');
 const DATA_DIR = process.env.DRAWBRIDGE_DATA_DIR || join(import.meta.dirname, 'data');
-const SNAPSHOT_INTERVAL = 20; // Write snapshot every N operations
-const SNAPSHOT_HISTORY_LIMIT = 50; // Keep this many versioned snapshots per session
+const SNAPSHOT_INTERVAL_MS = 5 * 60 * 1000; // Write snapshot every 5 minutes
+const SNAPSHOT_HISTORY_LIMIT = 50; // Keep this many versioned snapshots per session (~4 hours at 5-min intervals)
 
 // Ensure data directory exists
 mkdirSync(DATA_DIR, { recursive: true });
@@ -76,15 +76,11 @@ function writeSnapshot(sessionId, session) {
   renameSync(tmp, sp);
   // Truncate log after snapshot
   writeFileSync(logPath(sessionId), '');
-  session._opsSinceSnapshot = 0;
+  session._lastSnapshotAt = Date.now();
 }
 
 function appendLog(sessionId, session, op) {
   appendFileSync(logPath(sessionId), JSON.stringify(op) + '\n');
-  session._opsSinceSnapshot = (session._opsSinceSnapshot || 0) + 1;
-  if (session._opsSinceSnapshot >= SNAPSHOT_INTERVAL) {
-    writeSnapshot(sessionId, session);
-  }
 }
 
 function applyOp(session, op) {
@@ -111,7 +107,7 @@ function applyOp(session, op) {
 }
 
 function loadSession(sessionId) {
-  const session = { elements: [], appState: null, viewport: null, files: {}, clients: new Set(), _opsSinceSnapshot: 0 };
+  const session = { elements: [], appState: null, viewport: null, files: {}, clients: new Set(), _lastSnapshotAt: Date.now() };
 
   // Load snapshot if exists
   const sp = snapshotPath(sessionId);
@@ -134,7 +130,7 @@ function loadSession(sessionId) {
       for (const line of lines) {
         applyOp(session, JSON.parse(line));
       }
-      session._opsSinceSnapshot = lines.length;
+      // Log entries exist — snapshot may be stale, mark for early flush
     } catch (err) {
       console.error(`[Persist] Failed to replay log for ${sessionId}:`, err.message);
     }
@@ -212,7 +208,7 @@ function restoreSnapshot(sessionId, timestamp) {
     writeFileSync(tmp, JSON.stringify(data));
     renameSync(tmp, snapshotPath(sessionId));
     writeFileSync(logPath(sessionId), '');
-    session._opsSinceSnapshot = 0;
+    session._lastSnapshotAt = Date.now();
 
     // Broadcast to all connected clients
     broadcast(session, {
@@ -298,12 +294,10 @@ function undoLastOp(sessionId, session) {
   session.elements = rebuilt.elements;
   session.appState = rebuilt.appState;
   session.viewport = rebuilt.viewport;
-  session._opsSinceSnapshot = rebuilt._opsSinceSnapshot;
-
   return true;
 }
 
-// Session storage: sessionId -> { elements, clients, viewport, _opsSinceSnapshot }
+// Session storage: sessionId -> { elements, clients, viewport }
 const sessions = new Map();
 
 function getSession(id) {
@@ -693,6 +687,28 @@ if (initSpacesClient(process.env)) {
 } else {
   console.warn('[Spaces] Image storage disabled — set DO_SPACES_ACCESS_KEY, DO_SPACES_SECRET_KEY, DO_SPACES_BUCKET');
 }
+
+// --- Periodic snapshot flush (every 5 minutes) ---
+// Ensures in-memory state reaches disk even without a graceful shutdown.
+// Closes the SIGKILL gap: max data loss = 5 minutes server-side.
+
+setInterval(() => {
+  let flushed = 0;
+  for (const [sessionId, session] of sessions) {
+    const elapsed = Date.now() - (session._lastSnapshotAt || 0);
+    if (elapsed >= SNAPSHOT_INTERVAL_MS && session.elements.length > 0) {
+      try {
+        writeSnapshot(sessionId, session);
+        flushed++;
+      } catch (err) {
+        console.error(`[Persist] Periodic flush failed for ${sessionId}:`, err.message);
+      }
+    }
+  }
+  if (flushed > 0) {
+    console.log(`[Persist] Periodic flush: wrote ${flushed} snapshot(s)`);
+  }
+}, SNAPSHOT_INTERVAL_MS);
 
 httpServer.listen(PORT, () => {
   console.log(`[HTTP] API + WebSocket server running on port ${PORT}`);
