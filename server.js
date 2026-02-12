@@ -49,7 +49,13 @@ function logPath(sessionId) {
   return join(DATA_DIR, `${sessionId}.log`);
 }
 
-function writeSnapshot(sessionId, session) {
+function writeSnapshot(sessionId, session, { force = false } = {}) {
+  // Skip if nothing changed since last snapshot (unless forced by clear/restore)
+  if (!session._dirty && !force) {
+    session._lastSnapshotAt = Date.now();
+    return;
+  }
+
   const sp = snapshotPath(sessionId);
   const snapshotData = {
     elements: session.elements,
@@ -78,6 +84,7 @@ function writeSnapshot(sessionId, session) {
   // Truncate log after snapshot
   writeFileSync(logPath(sessionId), '');
   session._lastSnapshotAt = Date.now();
+  session._dirty = false;
 }
 
 function appendLog(sessionId, session, op) {
@@ -108,7 +115,7 @@ function applyOp(session, op) {
 }
 
 function loadSession(sessionId) {
-  const session = { elements: [], appState: null, viewport: null, files: {}, clients: new Set(), _lastSnapshotAt: Date.now(), _version: 0 };
+  const session = { elements: [], appState: null, viewport: null, files: {}, clients: new Set(), _lastSnapshotAt: Date.now(), _version: 0, _dirty: false };
 
   // Load snapshot if exists
   const sp = snapshotPath(sessionId);
@@ -199,7 +206,7 @@ function restoreSnapshot(sessionId, timestamp) {
     const session = getSession(sessionId);
 
     // Save current state as a new version before restoring
-    writeSnapshot(sessionId, session);
+    writeSnapshot(sessionId, session, { force: true });
 
     // Apply restored state
     session.elements = data.elements || [];
@@ -401,6 +408,7 @@ app.post('/api/session/:id/elements', (req, res) => {
   session.elements = drawElements;
   if (appState) session.appState = appState;
   session._version++;
+  session._dirty = true;
   appendLog(req.params.id, session, { type: 'set', elements: drawElements, appState: appState || null });
 
   // Send elements to all clients
@@ -432,6 +440,7 @@ app.post('/api/session/:id/append', (req, res) => {
 
     if (drawElements.length > 0) {
       session.elements = [...session.elements, ...drawElements];
+      session._dirty = true;
       appendLog(req.params.id, session, { type: 'append', elements: drawElements });
       broadcast(session, { type: 'append', elements: drawElements });
     }
@@ -471,7 +480,7 @@ app.post('/api/session/:id/clear', (req, res) => {
 
   // Version current state before clearing so it can be recovered
   if (session.elements.length > 0) {
-    writeSnapshot(req.params.id, session);
+    writeSnapshot(req.params.id, session, { force: true });
   }
 
   session.elements = [];
@@ -491,6 +500,7 @@ app.post('/api/session/:id/undo', (req, res) => {
   const success = undoLastOp(req.params.id, session);
 
   if (success) {
+    session._dirty = true;
     broadcast(session, {
       type: 'elements',
       elements: session.elements,
@@ -669,6 +679,7 @@ wss.on('connection', (ws, request) => {
 
         session.elements = msg.elements;
         session._version++;
+        session._dirty = true;
 
         // Track who made this edit
         const editorInfo = {
