@@ -7,95 +7,360 @@ description: |
   canvas via HTTP API, or renders to PNG/SVG.
 ---
 
-# Drawbridge Diagram Skill
+# Drawbridge - Real-time Diagram API
 
-Generate hand-drawn style diagrams as Excalidraw JSON. Uses the simplified element format with `convertToExcalidrawElements` handling all the heavy lifting (text measurement, container binding, arrow routing).
+This skill enables AI agents to create and manipulate diagrams using the Drawbridge server API. Drawbridge provides a real-time Excalidraw canvas with HTTP API and WebSocket support for collaborative diagram creation.
 
-## Element Format (Simplified)
+## Server Setup
 
-Only specify what matters. `convertToExcalidrawElements` fills in all required internal properties (groupIds, frameId, seeds, versions, etc.).
-
-### Required Fields (all elements)
-`type`, `id` (unique string), `x`, `y`
-
-### Defaults (skip these)
-strokeColor="#1e1e1e", backgroundColor="transparent", fillStyle="solid", strokeWidth=2, roughness=1, opacity=100
-
-### Labeled Shapes (PREFERRED)
-
-Add `label` to any shape for auto-centered text. No separate text elements needed:
-
-```json
-{ "type": "rectangle", "id": "r1", "x": 100, "y": 100, "width": 200, "height": 80,
-  "roundness": { "type": 3 }, "backgroundColor": "#a5d8ff", "fillStyle": "solid",
-  "label": { "text": "API Server", "fontSize": 20 } }
+Start the Drawbridge server:
+```bash
+npm start
+# or with PM2 for production:
+pm2 start ecosystem.config.js
 ```
 
-- Works on rectangle, ellipse, diamond
-- Text auto-centers and container auto-resizes to fit
-- Always include `"roundness": { "type": 3 }` for rounded corners
+Server runs on port 3062 by default (configurable via `DRAWBRIDGE_PORT`).
 
-### Standalone Text (titles, annotations only)
+## API Reference
 
-```json
-{ "type": "text", "id": "t1", "x": 150, "y": 50, "text": "System Architecture", "fontSize": 28 }
+### Core Endpoints
+
+**POST /api/session/:id/elements**
+Replace all elements in a session.
+```bash
+curl -X POST http://localhost:3062/api/session/my-diagram/elements \
+  -H "Content-Type: application/json" \
+  -d '{"elements": [...]}'
 ```
 
-- `x` is the LEFT edge of the text
-- To center text at position cx: `x = cx - (text.length * fontSize * 0.5) / 2`
-- `textAlign` does NOT control horizontal position — it only affects multi-line wrapping
-
-### Arrows
-
-```json
-{ "type": "arrow", "id": "a1", "x": 300, "y": 150, "width": 200, "height": 0,
-  "points": [[0,0],[200,0]], "endArrowhead": "arrow" }
+**POST /api/session/:id/append**
+Add elements to existing session (progressive drawing).
+```bash
+curl -X POST http://localhost:3062/api/session/my-diagram/append \
+  -H "Content-Type: application/json" \
+  -d '{"elements": [...]}'
 ```
 
-- `points`: [dx, dy] offsets from element x,y
-- `endArrowhead`: null | "arrow" | "bar" | "dot" | "triangle"
-
-### Arrow Labels
-
-Annotate arrows with text:
-
-```json
-{ "type": "arrow", "id": "a1", "x": 300, "y": 150, "width": 200, "height": 0,
-  "points": [[0,0],[200,0]], "endArrowhead": "arrow",
-  "label": { "text": "API call", "fontSize": 16 } }
+**GET /api/session/:id**
+Get current elements, appState, and viewport for a session.
+```bash
+curl http://localhost:3062/api/session/my-diagram
 ```
 
-### Arrow Bindings
+**POST /api/session/:id/clear**
+Clear all elements from a session.
+```bash
+curl -X POST http://localhost:3062/api/session/my-diagram/clear
+```
 
-Bind arrows to shapes so they stay connected when shapes are moved. Use `start` and `end` with the target element's `id`:
+**POST /api/session/:id/viewport**
+Set camera position and zoom level.
+```bash
+curl -X POST http://localhost:3062/api/session/my-diagram/viewport \
+  -H "Content-Type: application/json" \
+  -d '{"x": 100, "y": 200, "width": 1024, "height": 768}'
+```
+
+**POST /api/session/:id/undo**
+Undo the last operation.
+```bash
+curl -X POST http://localhost:3062/api/session/my-diagram/undo
+```
+
+### Management Endpoints
+
+**GET /api/sessions**
+List all active sessions with element and client counts.
+
+**GET /health**
+Health check with server status and connection counts.
+
+**GET /api/session/:id/versions**
+List available snapshot versions for time-travel restore.
+
+**POST /api/session/:id/restore**
+Restore session from a specific snapshot timestamp.
+
+### File Upload (Images)
+
+**POST /api/session/:id/files**
+Upload images to Digital Ocean Spaces CDN.
+```bash
+curl -X POST http://localhost:3062/api/session/my-diagram/files \
+  -H "Content-Type: application/json" \
+  -d '{"fileId": "img-1", "dataURL": "data:image/png;base64,...", "mimeType": "image/png"}'
+```
+
+**GET /api/session/:id/files**
+Get file metadata for a session.
+
+### Real-time Updates
+
+**WebSocket: ws://localhost:3062/ws/:sessionId**
+Connect for real-time bidirectional updates:
+- Receive element changes from other clients
+- Send collaborative edits
+- Get viewport updates
+- File upload notifications
+
+## Element Format Reference
+
+### Simplified Format (Recommended)
+
+Only specify what matters. `convertToExcalidrawElements` fills in all required internal properties:
 
 ```json
 {
-  "type": "arrow", "id": "a1", "x": 300, "y": 150, "width": 200, "height": 0,
-  "points": [[0,0],[200,0]], "endArrowhead": "arrow",
-  "start": { "id": "box1" },
-  "end": { "id": "box2" }
+  "id": "unique-element-id",
+  "type": "rectangle|ellipse|diamond|arrow|line|text|freedraw|image",
+  "x": 100,
+  "y": 100,
+  "width": 200,
+  "height": 100
 }
 ```
 
-**IMPORTANT:** Use `start`/`end` (skeleton format), NOT `startBinding`/`endBinding` (internal format). `convertToExcalidrawElements` resolves the bindings automatically, including setting up `boundElements` on the target shapes.
+### Full Excalidraw Format
 
-The binding point is calculated from the arrow's position relative to the shape. Position the arrow's x,y to start at the right edge of the source shape for a left-to-right connection.
-
-### Background Zones
-
-Group related elements with low-opacity rectangles:
+For direct API usage, include all required fields:
 
 ```json
-{ "type": "rectangle", "id": "zone1", "x": 80, "y": 80, "width": 540, "height": 400,
-  "backgroundColor": "#d3f9d8", "fillStyle": "solid", "roundness": { "type": 3 },
-  "strokeColor": "#22c55e", "strokeWidth": 1, "opacity": 35 }
+{
+  "id": "unique-element-id",
+  "type": "rectangle",
+  "x": 100,
+  "y": 100,
+  "width": 200,
+  "height": 100,
+  "strokeColor": "#000000",
+  "backgroundColor": "#ffffff", 
+  "fillStyle": "solid",
+  "strokeWidth": 2,
+  "roughness": 1,
+  "opacity": 100,
+  "angle": 0,
+  "seed": 123456,
+  "versionNonce": 789012,
+  "updated": 1640995200000,
+  "isDeleted": false,
+  "groupIds": [],
+  "roundness": null,
+  "boundElements": null,
+  "link": null,
+  "locked": false
+}
 ```
 
-Add a zone label as standalone text:
+### Labeled Shapes (Preferred)
+
+Add `label` to any shape for auto-centered text:
+
 ```json
-{ "type": "text", "id": "zone1-label", "x": 100, "y": 86, "text": "Frontend Layer",
-  "fontSize": 16, "strokeColor": "#15803d" }
+{
+  "type": "rectangle",
+  "id": "r1",
+  "x": 100,
+  "y": 100,
+  "width": 200,
+  "height": 80,
+  "roundness": { "type": 3 },
+  "backgroundColor": "#a5d8ff",
+  "fillStyle": "solid",
+  "label": { "text": "API Server", "fontSize": 20 }
+}
+```
+
+### Element Type Examples
+
+**Rectangle with Label**
+```json
+{
+  "id": "rect-1",
+  "type": "rectangle",
+  "x": 100, "y": 100,
+  "width": 200, "height": 100,
+  "strokeColor": "#000000",
+  "backgroundColor": "#e7f3ff",
+  "fillStyle": "solid",
+  "strokeWidth": 2,
+  "roughness": 1,
+  "roundness": { "type": 3 },
+  "label": { "text": "Process Step", "fontSize": 18 }
+}
+```
+
+**Text Element**
+```json
+{
+  "id": "text-1",
+  "type": "text", 
+  "x": 150, "y": 140,
+  "width": 100, "height": 25,
+  "text": "Process Step",
+  "fontSize": 16,
+  "fontFamily": 1,
+  "textAlign": "center",
+  "verticalAlign": "middle",
+  "strokeColor": "#000000",
+  "backgroundColor": "transparent"
+}
+```
+
+**Arrow with Bindings**
+```json
+{
+  "id": "arrow-1",
+  "type": "arrow",
+  "x": 300, "y": 150,
+  "width": 150, "height": 0,
+  "points": [[0, 0], [150, 0]],
+  "startBinding": {"elementId": "rect-1", "focus": 0.5, "gap": 10},
+  "endBinding": {"elementId": "rect-2", "focus": 0.5, "gap": 10},
+  "startArrowhead": null,
+  "endArrowhead": "arrow",
+  "strokeColor": "#000000",
+  "strokeWidth": 2,
+  "label": { "text": "API call", "fontSize": 14 }
+}
+```
+
+**Diamond (Decision)**
+```json
+{
+  "id": "diamond-1",
+  "type": "diamond",
+  "x": 200, "y": 300,
+  "width": 120, "height": 80,
+  "strokeColor": "#000000", 
+  "backgroundColor": "#fff2cc",
+  "fillStyle": "solid",
+  "label": { "text": "Decision?", "fontSize": 16 }
+}
+```
+
+## Common Diagram Patterns
+
+### Simple Flowchart
+```bash
+curl -X POST http://localhost:3062/api/session/flowchart/elements \
+  -H "Content-Type: application/json" \
+  -d '{
+    "elements": [
+      {
+        "id": "start",
+        "type": "ellipse",
+        "x": 100, "y": 50,
+        "width": 100, "height": 60,
+        "backgroundColor": "#d4ffd4",
+        "strokeColor": "#000000",
+        "strokeWidth": 2,
+        "roundness": { "type": 3 },
+        "label": { "text": "Start", "fontSize": 16 }
+      },
+      {
+        "id": "process",
+        "type": "rectangle", 
+        "x": 100, "y": 150,
+        "width": 100, "height": 60,
+        "backgroundColor": "#e7f3ff",
+        "strokeColor": "#000000",
+        "roundness": { "type": 3 },
+        "label": { "text": "Process", "fontSize": 16 }
+      },
+      {
+        "id": "arrow-1",
+        "type": "arrow",
+        "x": 150, "y": 110,
+        "width": 0, "height": 40,
+        "points": [[0, 0], [0, 40]],
+        "startBinding": {"elementId": "start", "focus": 0.5, "gap": 5},
+        "endBinding": {"elementId": "process", "focus": 0.5, "gap": 5},
+        "endArrowhead": "arrow"
+      }
+    ]
+  }'
+```
+
+### System Architecture Diagram  
+```bash
+curl -X POST http://localhost:3062/api/session/architecture/elements \
+  -H "Content-Type: application/json" \
+  -d '{
+    "elements": [
+      {
+        "id": "frontend",
+        "type": "rectangle",
+        "x": 50, "y": 50,
+        "width": 120, "height": 80, 
+        "backgroundColor": "#e1f5fe",
+        "strokeColor": "#01579b",
+        "strokeWidth": 2,
+        "roundness": { "type": 3 },
+        "label": { "text": "Frontend", "fontSize": 16 }
+      },
+      {
+        "id": "backend", 
+        "type": "rectangle",
+        "x": 250, "y": 50,
+        "width": 120, "height": 80,
+        "backgroundColor": "#f3e5f5", 
+        "strokeColor": "#4a148c",
+        "roundness": { "type": 3 },
+        "label": { "text": "Backend", "fontSize": 16 }
+      },
+      {
+        "id": "api-call",
+        "type": "arrow",
+        "x": 170, "y": 90, 
+        "width": 80, "height": 0,
+        "points": [[0, 0], [80, 0]],
+        "startBinding": {"elementId": "frontend", "focus": 0.5, "gap": 5},
+        "endBinding": {"elementId": "backend", "focus": 0.5, "gap": 5},
+        "endArrowhead": "arrow",
+        "label": { "text": "API", "fontSize": 14 }
+      }
+    ]
+  }'
+```
+
+### Network/Infrastructure Diagram
+```bash
+curl -X POST http://localhost:3062/api/session/network/elements \
+  -H "Content-Type: application/json" \
+  -d '{
+    "elements": [
+      {
+        "id": "router",
+        "type": "diamond",
+        "x": 200, "y": 100,
+        "width": 100, "height": 60,
+        "backgroundColor": "#ffecb3",
+        "strokeColor": "#f57f17",
+        "label": { "text": "Router", "fontSize": 16 }
+      },
+      {
+        "id": "server1",
+        "type": "rectangle", 
+        "x": 100, "y": 250,
+        "width": 80, "height": 60,
+        "backgroundColor": "#c8e6c9",
+        "strokeColor": "#2e7d32",
+        "roundness": { "type": 3 },
+        "label": { "text": "Server 1", "fontSize": 14 }
+      },
+      {
+        "id": "server2",
+        "type": "rectangle",
+        "x": 300, "y": 250, 
+        "width": 80, "height": 60,
+        "backgroundColor": "#c8e6c9",
+        "strokeColor": "#2e7d32",
+        "roundness": { "type": 3 },
+        "label": { "text": "Server 2", "fontSize": 14 }
+      }
+    ]
+  }'
 ```
 
 ## Color Palette
@@ -110,16 +375,16 @@ Add a zone label as standalone text:
 | Purple | `#8b5cf6` | Accents, special |
 | Cyan | `#06b6d4` | Info, secondary |
 
-### Fills (pastel, for shape backgrounds)
+### Fills (backgrounds)
 | Color | Hex | Use |
 |-------|-----|-----|
-| Light Blue | `#a5d8ff` | Input, sources, primary |
-| Light Green | `#b2f2bb` | Success, output, completed |
-| Light Orange | `#ffd8a8` | Warning, pending, external |
-| Light Purple | `#d0bfff` | Processing, middleware |
-| Light Red | `#ffc9c9` | Error, critical, alerts |
-| Light Yellow | `#fff3bf` | Notes, decisions, planning |
-| Light Teal | `#c3fae8` | Storage, data, memory |
+| Light Blue | `#e7f3ff` | Input, sources, primary |
+| Light Green | `#d4ffd4` | Success, output, completed |
+| Light Orange | `#fff2cc` | Warning, pending, external |
+| Light Purple | `#f3e5f5` | Processing, middleware |
+| Light Red | `#ffebee` | Error, critical, alerts |
+| Light Yellow | `#fffbf0` | Notes, decisions, planning |
+| Light Teal | `#e0f7fa` | Storage, data, memory |
 
 ### Background Zones (use with opacity: 30-35)
 | Color | Hex | Use |
@@ -128,125 +393,274 @@ Add a zone label as standalone text:
 | Purple zone | `#e5dbff` | Logic / agent layer |
 | Green zone | `#d3f9d8` | Data / tool layer |
 
+## Progressive Drawing
+
+Build diagrams step by step using `/append`:
+
+```bash
+# Step 1: Add main components
+curl -X POST http://localhost:3062/api/session/diagram/elements \
+  -H "Content-Type: application/json" \
+  -d '{"elements": [{"id": "start", "type": "ellipse", "x": 100, "y": 50, "width": 100, "height": 60, "backgroundColor": "#d4ffd4", "label": {"text": "Start", "fontSize": 16}}]}'
+
+# Step 2: Add more components  
+curl -X POST http://localhost:3062/api/session/diagram/append \
+  -H "Content-Type: application/json" \
+  -d '{"elements": [{"id": "process", "type": "rectangle", "x": 100, "y": 150, "width": 100, "height": 60, "backgroundColor": "#e7f3ff", "roundness": {"type": 3}, "label": {"text": "Process", "fontSize": 16}}]}'
+
+# Step 3: Connect with arrows
+curl -X POST http://localhost:3062/api/session/diagram/append \
+  -H "Content-Type: application/json" \
+  -d '{"elements": [{"id": "arrow-1", "type": "arrow", "x": 150, "y": 110, "width": 0, "height": 40, "points": [[0, 0], [0, 40]], "startBinding": {"elementId": "start", "focus": 0.5, "gap": 5}, "endBinding": {"elementId": "process", "focus": 0.5, "gap": 5}, "endArrowhead": "arrow"}]}'
+```
+
+## Complex Diagram Examples
+
+### System Architecture with Zones
+
+```json
+{
+  "elements": [
+    {
+      "id": "title",
+      "type": "text",
+      "x": 200, "y": 10,
+      "text": "System Architecture",
+      "fontSize": 28,
+      "strokeColor": "#000000"
+    },
+    {
+      "id": "zone-fe",
+      "type": "rectangle",
+      "x": 80, "y": 60,
+      "width": 300, "height": 200,
+      "backgroundColor": "#dbe4ff",
+      "fillStyle": "solid",
+      "roundness": { "type": 3 },
+      "strokeColor": "#4a9eed",
+      "strokeWidth": 1,
+      "opacity": 35
+    },
+    {
+      "id": "zone-fe-label",
+      "type": "text",
+      "x": 100, "y": 66,
+      "text": "Frontend Layer",
+      "fontSize": 16,
+      "strokeColor": "#1971c2"
+    },
+    {
+      "id": "app",
+      "type": "rectangle",
+      "x": 120, "y": 100,
+      "width": 200, "height": 80,
+      "roundness": { "type": 3 },
+      "backgroundColor": "#a5d8ff",
+      "fillStyle": "solid",
+      "strokeColor": "#1971c2",
+      "strokeWidth": 2,
+      "label": { "text": "React App", "fontSize": 20 }
+    },
+    {
+      "id": "api-arrow",
+      "type": "arrow",
+      "x": 320, "y": 140,
+      "width": 150, "height": 0,
+      "points": [[0,0],[150,0]],
+      "startBinding": {"elementId": "app", "focus": 0.5, "gap": 5},
+      "endBinding": {"elementId": "api", "focus": 0.5, "gap": 5},
+      "endArrowhead": "arrow",
+      "label": { "text": "REST API", "fontSize": 14 }
+    },
+    {
+      "id": "api",
+      "type": "rectangle",
+      "x": 470, "y": 100,
+      "width": 200, "height": 80,
+      "roundness": { "type": 3 },
+      "backgroundColor": "#d0bfff",
+      "fillStyle": "solid",
+      "strokeColor": "#6f42c1",
+      "strokeWidth": 2,
+      "label": { "text": "API Server", "fontSize": 20 }
+    }
+  ]
+}
+```
+
+### Decision Flowchart
+
+```json
+{
+  "elements": [
+    {
+      "id": "start",
+      "type": "ellipse",
+      "x": 200, "y": 50,
+      "width": 100, "height": 60,
+      "backgroundColor": "#d4ffd4",
+      "strokeColor": "#2e7d32",
+      "roundness": { "type": 3 },
+      "label": { "text": "Start", "fontSize": 16 }
+    },
+    {
+      "id": "decision",
+      "type": "diamond",
+      "x": 175, "y": 150,
+      "width": 150, "height": 80,
+      "backgroundColor": "#fff2cc",
+      "strokeColor": "#f57f17",
+      "label": { "text": "Valid input?", "fontSize": 16 }
+    },
+    {
+      "id": "yes-path",
+      "type": "rectangle",
+      "x": 350, "y": 150,
+      "width": 120, "height": 60,
+      "backgroundColor": "#d4ffd4",
+      "strokeColor": "#2e7d32",
+      "roundness": { "type": 3 },
+      "label": { "text": "Process", "fontSize": 16 }
+    },
+    {
+      "id": "no-path",
+      "type": "rectangle",
+      "x": 50, "y": 280,
+      "width": 120, "height": 60,
+      "backgroundColor": "#ffebee",
+      "strokeColor": "#d32f2f",
+      "roundness": { "type": 3 },
+      "label": { "text": "Show Error", "fontSize": 16 }
+    }
+  ]
+}
+```
+
+### Network Topology
+
+```json
+{
+  "elements": [
+    {
+      "id": "internet",
+      "type": "ellipse",
+      "x": 200, "y": 20,
+      "width": 100, "height": 60,
+      "backgroundColor": "#ffecb3",
+      "strokeColor": "#f57f17",
+      "label": { "text": "Internet", "fontSize": 16 }
+    },
+    {
+      "id": "firewall",
+      "type": "diamond",
+      "x": 175, "y": 120,
+      "width": 150, "height": 60,
+      "backgroundColor": "#ffcdd2",
+      "strokeColor": "#d32f2f",
+      "label": { "text": "Firewall", "fontSize": 16 }
+    },
+    {
+      "id": "load-balancer",
+      "type": "rectangle",
+      "x": 150, "y": 220,
+      "width": 200, "height": 60,
+      "backgroundColor": "#e1f5fe",
+      "strokeColor": "#01579b",
+      "roundness": { "type": 3 },
+      "label": { "text": "Load Balancer", "fontSize": 16 }
+    },
+    {
+      "id": "server-1",
+      "type": "rectangle",
+      "x": 50, "y": 320,
+      "width": 100, "height": 60,
+      "backgroundColor": "#c8e6c9",
+      "strokeColor": "#2e7d32",
+      "roundness": { "type": 3 },
+      "label": { "text": "Server 1", "fontSize": 16 }
+    },
+    {
+      "id": "server-2",
+      "type": "rectangle",
+      "x": 200, "y": 320,
+      "width": 100, "height": 60,
+      "backgroundColor": "#c8e6c9", 
+      "strokeColor": "#2e7d32",
+      "roundness": { "type": 3 },
+      "label": { "text": "Server 2", "fontSize": 16 }
+    },
+    {
+      "id": "server-3",
+      "type": "rectangle", 
+      "x": 350, "y": 320,
+      "width": 100, "height": 60,
+      "backgroundColor": "#c8e6c9",
+      "strokeColor": "#2e7d32", 
+      "roundness": { "type": 3 },
+      "label": { "text": "Server 3", "fontSize": 16 }
+    }
+  ]
+}
+```
+
 ## Sizing Rules
 
 ### Font Sizes
 - **Minimum 16** for body text, labels, descriptions
-- **Minimum 20** for titles and headings
+- **Minimum 20** for titles and headings  
 - **Minimum 14** for secondary annotations only (sparingly)
-- **NEVER** use fontSize below 14
 
 ### Element Sizes
 - **Minimum 120x60** for labeled rectangles/ellipses
 - **20-30px gaps** between elements minimum
 - Prefer fewer, larger elements over many tiny ones
 
-## Drawing Order (CRITICAL)
+## View the Diagram
 
-Array order = z-order (first = back, last = front).
+Open browser to: `http://localhost:3062/#session-id`
 
-**Emit progressively:** background zone → shape → its arrows → next shape
+## Best Practices
 
-- GOOD: `zone → box1 → arrow1 → box2 → arrow2 → box3`
-- BAD: `box1 → box2 → box3 → arrow1 → arrow2`
+1. **Use meaningful IDs**: `user-login`, `db-query`, `payment-gateway`
+2. **Group related elements**: Use consistent naming like `step-1`, `step-2`
+3. **Set proper dimensions**: Calculate based on text content
+4. **Use appropriate colors**: Match element types to semantic colors
+5. **Position logically**: Left-to-right flow, proper spacing
+6. **Add labels**: Include text for all shapes that need labels
+7. **Connect with arrows**: Use proper bindings for connected elements
+8. **Progressive drawing**: Build diagrams step-by-step for live viewing
 
-This matters for streaming to the live viewer where elements appear one at a time.
+## Camera Control
 
-## Complete Examples
-
-### Two Connected Labeled Boxes
-
-```json
-[
-  { "type": "rectangle", "id": "b1", "x": 100, "y": 100, "width": 200, "height": 100,
-    "roundness": { "type": 3 }, "backgroundColor": "#a5d8ff", "fillStyle": "solid",
-    "label": { "text": "Start", "fontSize": 20 } },
-  { "type": "arrow", "id": "a1", "x": 300, "y": 150, "width": 150, "height": 0,
-    "points": [[0,0],[150,0]], "endArrowhead": "arrow",
-    "start": { "id": "b1" },
-    "end": { "id": "b2" } },
-  { "type": "rectangle", "id": "b2", "x": 450, "y": 100, "width": 200, "height": 100,
-    "roundness": { "type": 3 }, "backgroundColor": "#b2f2bb", "fillStyle": "solid",
-    "label": { "text": "End", "fontSize": 20 } }
-]
-```
-
-### System Architecture with Zones
-
-```json
-[
-  { "type": "text", "id": "title", "x": 200, "y": 10, "text": "System Architecture", "fontSize": 28 },
-  { "type": "rectangle", "id": "zone-fe", "x": 80, "y": 60, "width": 300, "height": 200,
-    "backgroundColor": "#dbe4ff", "fillStyle": "solid", "roundness": { "type": 3 },
-    "strokeColor": "#4a9eed", "strokeWidth": 1, "opacity": 35 },
-  { "type": "text", "id": "zone-fe-label", "x": 100, "y": 66, "text": "Frontend",
-    "fontSize": 16, "strokeColor": "#1971c2" },
-  { "type": "rectangle", "id": "app", "x": 120, "y": 100, "width": 200, "height": 80,
-    "roundness": { "type": 3 }, "backgroundColor": "#a5d8ff", "fillStyle": "solid",
-    "label": { "text": "React App", "fontSize": 20 } },
-  { "type": "arrow", "id": "a1", "x": 320, "y": 140, "width": 150, "height": 0,
-    "points": [[0,0],[150,0]], "endArrowhead": "arrow",
-    "label": { "text": "REST API", "fontSize": 14 } },
-  { "type": "rectangle", "id": "api", "x": 470, "y": 100, "width": 200, "height": 80,
-    "roundness": { "type": 3 }, "backgroundColor": "#d0bfff", "fillStyle": "solid",
-    "label": { "text": "API Server", "fontSize": 20 } }
-]
-```
-
-## Output Options
-
-### 1. Push to Excalidraw Live (real-time)
-
-Push elements to the live viewer via HTTP API:
-
+Set viewport to focus on specific diagram areas:
 ```bash
-curl -s -X POST http://localhost:3062/api/session/SESSION_NAME/elements \
+curl -X POST http://localhost:3062/api/session/my-diagram/viewport \
   -H "Content-Type: application/json" \
-  -d '{"elements": [...]}'
+  -d '{"x": 0, "y": 0, "width": 1200, "height": 800}'
 ```
 
-Live viewer URL: `http://localhost:3060/#SESSION_NAME` (or your configured host)
+## Session Management
 
-API endpoints:
-- `POST /api/session/:id/elements` — Replace all elements
-- `POST /api/session/:id/append` — Add elements to existing
-- `POST /api/session/:id/clear` — Clear canvas
-- `POST /api/session/:id/undo` — Undo last operation
-- `GET /api/session/:id` — Get current elements
+- Sessions persist automatically to disk in `./data/`
+- Use descriptive session IDs: `user-onboarding`, `payment-flow`, `system-architecture`  
+- Sessions support undo, clear, and snapshot versioning
+- Multiple clients can collaborate on the same session via WebSocket
+- Sessions are evicted from memory after 5 minutes of inactivity (data remains on disk)
 
-### 2. Save as .excalidraw file
+## Rendering to Files
 
-Wrap elements in the document structure:
-
-```json
-{
-  "type": "excalidraw",
-  "version": 2,
-  "source": "https://excalidraw.com",
-  "elements": [ /* your elements array */ ],
-  "appState": { "viewBackgroundColor": "#ffffff", "gridSize": null },
-  "files": {}
-}
-```
-
-### 3. Render to SVG or PNG
-
+Export diagrams as PNG or SVG:
 ```bash
-# From .excalidraw file (skeleton or resolved elements both work)
-npx tsx scripts/render.ts input.excalidraw output.png
-npx tsx scripts/render.ts input.excalidraw output.svg
-
-# From a live session
-curl -s http://localhost:3062/api/session/SESSION_NAME | \
-  python3 -c "import json,sys; d=json.load(sys.stdin); json.dump({'type':'excalidraw','version':2,'source':'https://excalidraw.com','elements':d['elements'],'appState':{'viewBackgroundColor':'#ffffff','gridSize':None},'files':{}}, open('/tmp/diagram.excalidraw','w'))"
-npx tsx scripts/render.ts /tmp/diagram.excalidraw /tmp/diagram.png
+# Get session data and render to image
+curl -s http://localhost:3062/api/session/my-diagram > diagram.excalidraw
+npx tsx scripts/render.ts diagram.excalidraw diagram.png
+npx tsx scripts/render.ts diagram.excalidraw diagram.svg
 ```
-
-Uses headless Chromium + Excalidraw 0.18. Handles skeleton elements (with `label`, `start`/`end`) automatically via `convertToExcalidrawElements`. Takes ~5-8 seconds.
 
 ## Generation Workflow
 
 1. **Plan layout** — Decide zones, flow direction, element grouping
-2. **Generate elements** — Follow progressive drawing order
+2. **Generate elements** — Follow progressive drawing order  
 3. **Push to live viewer** — For real-time review with user
-4. **Render to PNG/SVG** — For embedding in docs, reports, or sharing
+4. **Set viewport** — Focus camera on the important parts
+5. **Render to PNG/SVG** — For embedding in docs, reports, or sharing

@@ -8,7 +8,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "start": "node server.js",
-    "render": "npx tsx scripts/render.ts"
+    "render": "npx tsx scripts/render.ts",
+    "test": "node test/api.test.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.985.0",
